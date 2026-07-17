@@ -13,6 +13,46 @@ GITHUB_API_IMAGES = "https://api.github.com/repos/headmkyoto-star/headmint-kawar
 GITHUB_API_VIDEOS = "https://api.github.com/repos/headmkyoto-star/headmint-kawaramachi-threads/contents/videos"
 GITHUB_RAW_VIDEOS = "https://raw.githubusercontent.com/headmkyoto-star/headmint-kawaramachi-threads/main/videos/"
 
+# === 動画の重複防止（過去5日間に使った動画を避ける） ===
+_HISTORY_PATH = "state/used_videos_history.json"
+_HISTORY_KEEP_DAYS = 5
+
+def _load_history():
+    if os.path.exists(_HISTORY_PATH):
+        try:
+            with open(_HISTORY_PATH) as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def _save_history(history):
+    os.makedirs(os.path.dirname(_HISTORY_PATH), exist_ok=True)
+    with open(_HISTORY_PATH, "w") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+
+def pick_unique_video(videos_pool):
+    """過去5日間に使った動画URLを除外して選ぶ。全部使用済みなら一番昔に使ったものを選ぶ。"""
+    history = _load_history()
+    today = datetime.date.today()
+    cutoff = (today - datetime.timedelta(days=_HISTORY_KEEP_DAYS)).isoformat()
+    recent = [h for h in history if h.get("date", "") > cutoff]
+    used = {h["url"] for h in recent}
+    candidates = [v for v in videos_pool if v["url"] not in used]
+    if candidates:
+        chosen = random.choice(candidates)
+    else:
+        # 全部5日以内に使用済み → 一番昔に使った動画を選ぶ
+        last_idx = {}
+        for i, h in enumerate(recent):
+            last_idx[h["url"]] = i
+        chosen = min(videos_pool, key=lambda v: last_idx.get(v["url"], -1))
+    recent.append({"date": today.isoformat(), "url": chosen["url"]})
+    _save_history(recent[-40:])
+    print(f"DEDUP:除外{len(used)}件/候補{len(candidates)}件")
+    return chosen
+# === /重複防止 ===
+
 DAILY_THEMES = [
     # 体の疲れ・感覚系
     "頭が重たくてぼーっとする感じについて",
@@ -176,7 +216,7 @@ def get_media():
     jst = datetime.timezone(datetime.timedelta(hours=9))
     hour = datetime.datetime.now(jst).hour
     if hour in (7, 17, 21) and videos_pool:
-        chosen = random.choice(videos_pool)
+        chosen = pick_unique_video(videos_pool)
         print(f"MEDIA_CHOSEN:{hour}H_VIDEO:" + chosen["url"].split("/")[-1][:40])
         return chosen
     # その他の時間: 画像・動画ランダム
@@ -184,6 +224,8 @@ def get_media():
     if not media_pool:
         return None
     chosen = random.choice(media_pool)
+    if chosen["type"] == "VIDEO":
+        chosen = pick_unique_video(videos_pool)
     print("MEDIA_CHOSEN:" + chosen["type"] + ":" + chosen["url"].split("/")[-1][:40])
     return chosen
 
